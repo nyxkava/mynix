@@ -1,239 +1,480 @@
 # ============================================================================
-#  configuration.nix — Desktop Nvidia | Gaming + Dev | Flatpak | SRCDS
+#  configuration.nix — Nvidia | Gaming + Dev | Flakes & HM Ready | Multi-SRCDS
 # ============================================================================
-#
-#  COMO USAR:
-#    1. Copie este arquivo para /etc/nixos/configuration.nix
-#       (faça backup do original antes: sudo cp /etc/nixos/configuration.nix /etc/nixos/configuration.nix.bak)
-#    2. Ajuste a seção "1. SISTEMA BASE" (hostname, timezone, usuário).
-#    3. Rode: sudo nixos-rebuild switch
-#
-#  ESTRUTURA (use Ctrl+F / busca pelos títulos numerados):
-#    1. SISTEMA BASE        — boot, hostname, timezone, locale
-#    2. REDE                — NetworkManager, firewall
-#    3. NVIDIA               — driver proprietário, OpenGL, Vulkan
-#    4. DESKTOP / DE         — KDE Plasma (troque pra Hyprland/i3 aqui)
-#    5. ÁUDIO                — PipeWire
-#    6. USUÁRIO              — sua conta, grupos
-#    7. PACOTES DO SISTEMA   — ferramentas base sempre instaladas
-#    8. GAMING               — Steam, Proton, GameMode, MangoHud
-#    9. DESENVOLVIMENTO      — linguagens, editores, Docker
-#   10. FLATPAK              — habilitar + Flathub
-#   11. SERVIDOR SRCDS       — steamcmd, firewall, systemd service simples
-#   12. EXTRAS / MANUTENÇÃO  — garbage collection, optimise, flags do sistema
-#
-#  DICA: cada seção é independente. Pra desligar algo, comente o bloco
-#  inteiro (Ctrl+/ no editor) ou apague — nada depende de ordem aqui.
+#  COMO USAR (Modo Clássico ou Modo Flake):
+#    - Com Flakes: sudo nixos-rebuild switch --flake /etc/nixos#nixos (alias: nrs)
+#    - Sem Flakes: sudo nixos-rebuild switch
 # ============================================================================
 
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, inputs ? {}, unstable ? null, ... }:
 
 let
-  # ──────────────────────────────────────────────────────────────────────────
-  # UNSTABLE — Direct Import via builtins.fetchTarball (sem flakes)
-  #
-  # Como usar em environment.systemPackages:
-  #   unstable.nomeDoPackage   → pega a versão do nixpkgs-unstable
-  #   pkgs.nomeDoPackage       → continua pegando a versão stable (normal)
-  #
-  # Exemplo:
-  #   environment.systemPackages = with pkgs; [
-  #     git                   # stable
-  #     unstable.helix        # unstable
-  #   ];
-  #
-  # NOTA: sem `sha256` o Nix baixa sempre o HEAD do nixos-unstable a cada
-  # rebuild (impuro, mas prático). Para fixar um snapshot e ganhar cache:
-  #   1. Ache o commit: git ls-remote https://github.com/NixOS/nixpkgs nixos-unstable
-  #   2. Monte a URL:   https://github.com/NixOS/nixpkgs/archive/<COMMIT>.tar.gz
-  #   3. Gere o hash:   nix-prefetch-url --unpack <URL>
-  #   4. Adicione:      sha256 = "<HASH>";
-  # ──────────────────────────────────────────────────────────────────────────
-  unstable = import (builtins.fetchTarball {
-    url = "https://github.com/NixOS/nixpkgs/archive/nixos-unstable.tar.gz";
-  }) {
-    config = config.nixpkgs.config; # herda allowUnfree = true e demais opções
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                      PAINEL DE CONTROLE RÁPIDO                         ║
+  # ║         Altere todo o comportamento e segurança do sistema aqui        ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  cfg = {
+    # --- 1. Identidade, Shell e Regionalização ---
+    usuario        = "nap";
+    gitUser        = "nap";                 # Usado pelo Home Manager para configurar o Git
+    gitEmail       = "seu-email@exemplo.com";
+    hostname       = "nixos";
+    shellPadrao    = "fish";                # "fish" (via wrapper POSIX seguro), "zsh" ou "bash"
+    timezone       = "America/Sao_Paulo";
+    locale         = "en_US.UTF-8";
+    localeExtraPt  = false;                 # true = datas, moeda e medidas em pt_BR
+    tecladoConsole = "br-abnt2";            # "br-abnt2" ou "us"
+    tecladoGrafico = "br";                  # "br" ou "us"
+    stateVersion   = "26.05";               # NÃO mude após a instalação inicial
+
+    # --- 2. Home Manager (Gerencia configs da sua $HOME declarativamente) ---
+    # Se você estiver usando o flake.nix acima, deixe true!
+    # Se estiver rodando sem flake e sem o canal do home-manager instalado, mude para false.
+    usarHomeManager = true;
+
+    # --- 3. Hardware, Kernel, Energia e Performance ---
+    kernel      = "stable";                 # "stable" (seguro p/ VMware/Nvidia), "zen" (jogos) ou "latest"
+    nvidiaOpen  = false;                    # true recomendado para RTX série 20 ou superior
+    cpuGovernor = "schedutil";              # "performance" ou "schedutil"
+    ssdTrim     = true;
+    zramEnable  = true;
+    zramPercent = 50;
+    bluetooth   = true;
+
+    # --- 4. Segundo SSD / NVMe Opcional (para Jogos e Servidores) ---
+    discoSecundario = {
+      enable        = false;                # true = monta automaticamente no boot
+      uuid          = "COLE-O-UUID-AQUI";   # Veja com: lsblk -f
+      pontoMontagem = "/mnt/ssd";
+      fsType        = "ext4";               # "ext4", "btrfs" ou "ntfs3"
+    };
+
+    # --- 5. Ambientes Gráficos e Login ---
+    desktop = {
+      plasma    = true;                     # KDE Plasma 6 (Wayland)
+      hyprland  = true;                     # Hyprland (Wayland) + ecossistema completo
+      i3        = false;                    # i3wm (X11)
+      autoLogin = false;
+    };
+
+    # --- 6. Módulos e Recursos do Sistema ---
+    modulos = {
+      gaming     = true;                    # Steam (+Proton-GE), Gamemode, Lutris, Heroic, MangoHud
+      dev        = true;                    # VSCode, Neovim, linguagens, compiladores, Git TUI
+      docker     = true;                    # Containers Docker
+      vmware     = true;                    # VMware Workstation Pro + módulos
+      flatpak    = true;                    # Flatpak + Flathub + XDG Portals
+      appimage   = true;                    # Executa .AppImage direto com 2 cliques
+      i2p        = true;                    # Roteador I2P
+      ssh        = false;                   # Servidor OpenSSH blindado
+      impressora = false;                   # CUPS
+      earlyOom   = true;                    # Proteção contra congelamento por falta de RAM
+    };
+
+    # --- 7. Segurança e Privacidade de Rede ---
+    seguranca = {
+      dockerRootless   = false;
+      dockerLocalOnly  = true;              # Impede que o Docker exponha portas na rede local sem aviso
+      dnsCriptografado = false;             # DNS-over-TLS via Quad9/Cloudflare
+      sudoPedeSenha    = true;
+    };
+
+    # --- 8. MULTI-SRCDS (Garry's Mod, CS2, TF2, etc. simultâneos ou individuais) ---
+    srcds = {
+      # ONDE OS SERVIDORES FICAM SALVOS POR PADRÃO:
+      # "home"   -> Salva em /home/<usuario>/srcds/<nome-do-servidor>
+      # "custom" -> Salva no segundo SSD/caminho definido em caminhoCustom
+      localArmazenamento = "home";          # "home" ou "custom"
+      caminhoCustom      = "/mnt/ssd/srcds";
+
+      # LISTA DE SERVIDORES: Adicione quantos quiser!
+      # Para cada um, o NixOS cria os comandos:
+      #   srcds-<nome>-update | srcds-<nome>-start | srcds-<nome>-stop | srcds-<nome>-logs | srcds-<nome>-dir
+      servidores = {
+        # --- Servidor 1: Garry's Mod ---
+        gmod = {
+          enable    = false;                # Mude para true para ativar o serviço e abrir as portas
+          autoStart = false;                # true = liga sozinho no boot do PC
+          appId     = 4020;                 # AppID do Garry's Mod Dedicated Server
+          execBin   = "srcds_run";
+          execArgs  = "-game garrysmod -console -port 27015 +maxplayers 16 +gamemode sandbox +map gm_construct";
+          portasUDP = [ 27015 ];
+          portasTCP = [ 27015 ];
+          # Se quiser forçar SÓ este servidor em um disco específico, descomente a linha abaixo:
+          # customDir = "/mnt/ssd/meus_servidores/gmod";
+        };
+
+        # --- Servidor 2: Counter-Strike 2 ---
+        cs2 = {
+          enable    = false;
+          autoStart = false;
+          appId     = 730;
+          execBin   = "game/bin/linuxsteamrt64/cs2";
+          execArgs  = "-dedicated -port 27016 +map de_dust2 +game_type 0 +game_mode 1 -maxplayers 10";
+          portasUDP = [ 27016 27020 ];      # Porta 27016 para não dar conflito se rodar junto com o GMod
+          portasTCP = [ 27016 ];
+        };
+      };
+    };
+
+    # --- 9. Manutenção Automática do NixOS ---
+    manutencao = {
+      gcAutomatico = true;
+      gcManterDias = "14d";
+    };
   };
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Lógica Interna Híbrida (Funciona com Flake ou Sem Flake automaticamente)
+  # ──────────────────────────────────────────────────────────────────────────
+  pkgsUnstable =
+    if unstable != null then unstable
+    else import (builtins.fetchTarball {
+      url = "https://github.com/NixOS/nixpkgs/archive/nixos-unstable.tar.gz";
+    }) { config = config.nixpkgs.config; };
+
+  kernelMap = {
+    stable = pkgs.linuxPackages;
+    zen    = pkgs.linuxPackages_zen;
+    latest = pkgs.linuxPackages_latest;
+  };
+
+  # Resolve o diretório base do SRCDS ("home" vs "custom")
+  srcdsBaseDir =
+    if cfg.srcds.localArmazenamento == "home"
+    then "/home/${cfg.usuario}/srcds"
+    else cfg.srcds.caminhoCustom;
+
+  # Função que descobre a pasta de cada servidor individual
+  dirDoServidor = nome: srv:
+    if (srv ? customDir && srv.customDir != null)
+    then srv.customDir
+    else "${srcdsBaseDir}/${nome}";
+
+  # Filtra apenas os servidores que estão com enable = true
+  servidoresAtivos = lib.filterAttrs (_: srv: srv.enable) cfg.srcds.servidores;
+
+  # Gera automaticamente os 5 aliases de terminal para CADA servidor declarado
+  aliasesSrcds = lib.foldl' (acc: nome:
+    let
+      srv = cfg.srcds.servidores.${nome};
+      dir = dirDoServidor nome srv;
+    in acc // {
+      "srcds-${nome}-dir"     = "cd '${dir}'";
+      "srcds-${nome}-update"  = "HOME='${srcdsBaseDir}' steamcmd +force_install_dir '${dir}' +login anonymous +app_update ${toString srv.appId} validate +quit";
+      "srcds-${nome}-start"   = "sudo systemctl start srcds-${nome}";
+      "srcds-${nome}-stop"    = "sudo systemctl stop srcds-${nome}";
+      "srcds-${nome}-restart" = "sudo systemctl restart srcds-${nome}";
+      "srcds-${nome}-status"  = "systemctl status srcds-${nome}";
+      "srcds-${nome}-logs"    = "journalctl -u srcds-${nome} -f";
+    }
+  ) {} (lib.attrNames cfg.srcds.servidores);
+
+  # Verifica se o módulo do Home Manager está carregado na avaliação atual
+  hmDisponivel = cfg.usarHomeManager && (options ? home-manager);
 in
 
 {
   imports = [
-    ./hardware-configuration.nix # gerado automaticamente pelo instalador, não mexa
+    ./hardware-configuration.nix
   ];
 
   # ==========================================================================
-  # 1. SISTEMA BASE
+  # 1. SISTEMA BASE, KERNEL, PERFORMANCE E SEGURANÇA DE KERNEL
   # ==========================================================================
-
-  boot.loader.systemd-boot.enable = true;
+  boot.loader.systemd-boot = {
+    enable = true;
+    configurationLimit = 15;
+    editor = false;
+  };
   boot.loader.efi.canTouchEfiVariables = true;
+  boot.kernelPackages = kernelMap.${cfg.kernel};
 
-  # Kernel mais recente: melhor suporte a hardware novo (GPU, periféricos).
-  # Se quiser mais estabilidade em vez de pacotes mais novos, troque para
-  # pkgs.linuxPackages (sem o "_latest").
-  boot.kernelPackages = pkgs.linuxPackages_latest;
+  boot.kernel.sysctl = {
+    "vm.max_map_count" = 2147483642;
+    "kernel.split_lock_mitigate" = 0;
+    "net.ipv4.conf.all.rp_filter" = 1;
+    "net.ipv4.conf.default.rp_filter" = 1;
+    "net.ipv4.icmp_echo_ignore_broadcasts" = 1;
+    "kernel.kptr_restrict" = 2;
+    "kernel.dmesg_restrict" = 1;
+  };
 
-  networking.hostName = "nixos"; # <-- TROQUE AQUI
+  powerManagement.cpuFreqGovernor = cfg.cpuGovernor;
+  services.fstrim.enable = cfg.ssdTrim;
 
-  time.timeZone = "America/Sao_Paulo"; # <-- ajuste se necessário
+  zramSwap = {
+    enable = cfg.zramEnable;
+    memoryPercent = cfg.zramPercent;
+    algorithm = "zstd";
+  };
 
-  i18n.defaultLocale = "en_US.UTF-8";
+  services.earlyoom.enable = cfg.modulos.earlyOom;
 
-  #LOCALES OPCIONAIS!
+  hardware.bluetooth = lib.mkIf cfg.bluetooth {
+    enable = true;
+    powerOnBoot = true;
+  };
+  services.blueman.enable = cfg.bluetooth;
 
-  #i18n.extraLocaleSettings = {
-    #LC_ADDRESS = "pt_BR.UTF-8";
-    #LC_IDENTIFICATION = "pt_BR.UTF-8";
-    #LC_MEASUREMENT = "pt_BR.UTF-8";
-    #LC_MONETARY = "pt_BR.UTF-8";
-    #LC_NAME = "pt_BR.UTF-8";
-    #LC_NUMERIC = "pt_BR.UTF-8";
-    #LC_PAPER = "pt_BR.UTF-8";
-    #LC_TELEPHONE = "pt_BR.UTF-8";
-    #LC_TIME = "pt_BR.UTF-8";
-  #};
+  networking.hostName = cfg.hostname;
+  time.timeZone = cfg.timezone;
+  i18n.defaultLocale = cfg.locale;
 
-  console.keyMap = "br-abnt2"; # troque para "us" se seu teclado for ABNT-less
+  i18n.extraLocaleSettings = lib.mkIf cfg.localeExtraPt {
+    LC_ADDRESS        = "pt_BR.UTF-8";
+    LC_IDENTIFICATION = "pt_BR.UTF-8";
+    LC_MEASUREMENT    = "pt_BR.UTF-8";
+    LC_MONETARY       = "pt_BR.UTF-8";
+    LC_NAME           = "pt_BR.UTF-8";
+    LC_NUMERIC        = "pt_BR.UTF-8";
+    LC_PAPER          = "pt_BR.UTF-8";
+    LC_TELEPHONE      = "pt_BR.UTF-8";
+    LC_TIME           = "pt_BR.UTF-8";
+  };
 
-  # Permite instalar pacotes não-livres (driver Nvidia, Steam, etc).
+  console.keyMap = cfg.tecladoConsole;
+  services.xserver.xkb.layout = cfg.tecladoGrafico;
   nixpkgs.config.allowUnfree = true;
 
-  # ==========================================================================
-  # 2. REDE
-  # ==========================================================================
+  fileSystems.${cfg.discoSecundario.pontoMontagem} = lib.mkIf cfg.discoSecundario.enable {
+    device = "/dev/disk/by-uuid/${cfg.discoSecundario.uuid}";
+    fsType = cfg.discoSecundario.fsType;
+    options = [
+      "defaults"
+      "nofail"
+    ] ++ lib.optionals (cfg.discoSecundario.fsType == "ntfs3") [
+      "uid=1000"
+      "gid=100"
+      "rw"
+      "umask=000"
+    ];
+  };
 
-  networking.networkmanager.enable = true;
+  # ==========================================================================
+  # 2. REDE, FIREWALL, DNS E SSH BLINDADO
+  # ==========================================================================
+  networking.networkmanager = {
+    enable = true;
+    dns = if cfg.seguranca.dnsCriptografado then "systemd-resolved" else "default";
+  };
 
-  # Firewall ligado por padrão. Portas específicas (ex: SRCDS) são abertas
-  # na seção 11 — o Nix mescla automaticamente as duas declarações de
-  # "networking.firewall", então não há conflito, só separação por contexto.
   networking.firewall.enable = true;
 
-  #I2P
-  services.i2p.enable = true;
+  services.resolved = lib.mkIf cfg.seguranca.dnsCriptografado {
+    enable = true;
+    dnssec = "true";
+    domains = [ "~." ];
+    fallbackDns = [ "9.9.9.9#dns.quad9.net" "1.1.1.1#cloudflare-dns.com" ];
+    dnsovertls = "true";
+  };
+
+  services.i2p.enable = cfg.modulos.i2p;
+  services.printing.enable = cfg.modulos.impressora;
+
+  services.openssh = lib.mkIf cfg.modulos.ssh {
+    enable = true;
+    settings = {
+      PermitRootLogin = "no";
+      PasswordAuthentication = false;
+      KbdInteractiveAuthentication = false;
+      X11Forwarding = false;
+    };
+  };
 
   # ==========================================================================
-  # 3. NVIDIA — driver proprietário
+  # 3. NVIDIA E GRÁFICOS
   # ==========================================================================
-
-  # Habilita OpenGL/Vulkan no sistema (necessário para qualquer GPU).
   hardware.graphics = {
     enable = true;
-    enable32Bit = true; # essencial pra rodar jogos 32-bit via Steam/Proton
+    enable32Bit = true;
   };
 
   services.xserver.videoDrivers = [ "nvidia" ];
 
   hardware.nvidia = {
-    # Driver proprietário "stable" (recomendado). Existe também ".beta" se
-    # quiser features mais novas, mas menos testadas.
     package = config.boot.kernelPackages.nvidiaPackages.stable;
-
-    # Modesetting é necessário para Wayland e melhora o boot (sem tearing
-    # na tela de boot). Mantenha true sempre.
     modesetting.enable = true;
-
-    # Desktop com APENAS Nvidia (sem GPU híbrida) -> "open" pode ficar false,
-    # pois o driver proprietário "kernel module" closed-source funciona bem
-    # em placas Turing+ (GTX 16xx / RTX 20xx pra cima). Se você tiver uma RTX
-    # série 20 ou mais nova e quiser o módulo kernel open-source da própria
-    # Nvidia (mais novo, mantido por eles), troque para `true`.
-    open = false;
-
-    # Ativa o utilitário gráfico "nvidia-settings".
+    open = cfg.nvidiaOpen;
     nvidiaSettings = true;
-
-    # Power management: geralmente não precisa em desktop (isso é mais
-    # relevante para laptops com suspend/resume). Deixe false.
     powerManagement.enable = false;
     powerManagement.finegrained = false;
   };
 
   # ==========================================================================
-  # 4. DESKTOP / DE
+  # 4. AMBIENTES GRÁFICOS E PORTALS (Wayland / X11)
   # ==========================================================================
-  # Por padrão está configurado KDE PLASMA (Wayland), como você pediu.
-  # Pra trocar no futuro pra Hyprland ou i3, veja os blocos comentados logo
-  # abaixo: é só comentar o bloco do KDE e descomentar o que você quiser.
-  # Não precisa mexer em mais nada — Nvidia, áudio, etc já funcionam com
-  # qualquer um dos três.
+  security.polkit.enable = true;
+  security.sudo.wheelNeedsPassword = cfg.seguranca.sudoPedeSenha;
 
-  services.displayManager.sddm.enable = true;
-  services.displayManager.sddm.wayland.enable = true;
-  services.desktopManager.plasma6.enable = true;
+  services.displayManager.sddm = lib.mkIf (cfg.desktop.plasma || cfg.desktop.hyprland) {
+    enable = true;
+    wayland.enable = true;
+  };
 
-  # --- OPÇÃO ALTERNATIVA: Hyprland -------------------------------------
-  # Para trocar: comente o bloco do KDE acima e descomente abaixo.
-  #
-  programs.hyprland = {
-    enable  = true;
+  services.displayManager.autoLogin = lib.mkIf cfg.desktop.autoLogin {
+    enable = true;
+    user = cfg.usuario;
+  };
+
+  services.desktopManager.plasma6.enable = cfg.desktop.plasma;
+
+  programs.hyprland = lib.mkIf cfg.desktop.hyprland {
+    enable = true;
     withUWSM = true;
     xwayland.enable = true;
   };
-  # services.displayManager.sddm.enable = true; # ou greetd, à sua escolha
-  #
-  # # Hyprland precisa dessas variáveis de ambiente pra rodar bem com Nvidia:
-  environment.sessionVariables = {
+
+  environment.sessionVariables = lib.mkIf cfg.desktop.hyprland {
     LIBVA_DRIVER_NAME = "nvidia";
-    XDG_SESSION_TYPE = "wayland";
     __GLX_VENDOR_LIBRARY_NAME = "nvidia";
+    NIXOS_OZONE_WL = "1";
   };
-  # -----------------------------------------------------------------------
 
-  # --- OPÇÃO ALTERNATIVA: i3wm (X11) -------------------------------------
-  # Para trocar: comente o bloco do KDE acima e descomente abaixo.
-  #
-  # services.xserver.enable = true;
-  # services.xserver.windowManager.i3.enable = true;
-  # services.displayManager.lightdm.enable = true;
-  # -----------------------------------------------------------------------
+  xdg.portal = {
+    enable = true;
+    wlr.enable = cfg.desktop.hyprland;
+    extraPortals = with pkgs; [
+      xdg-desktop-portal-gtk
+    ] ++ lib.optional cfg.desktop.hyprland xdg-desktop-portal-hyprland;
+  };
 
-  # Teclado também no ambiente gráfico (X11/XWayland usam isso).
-  services.xserver.xkb.layout = "br";
+  services.xserver = lib.mkIf cfg.desktop.i3 {
+    enable = true;
+    windowManager.i3.enable = true;
+  };
+  services.displayManager.lightdm.enable = lib.mkIf (cfg.desktop.i3 && !cfg.desktop.plasma && !cfg.desktop.hyprland) true;
 
   # ==========================================================================
-  # 5. ÁUDIO — PipeWire (padrão moderno, substitui PulseAudio/JACK)
+  # 5. ÁUDIO (PipeWire)
   # ==========================================================================
-
-  services.pulseaudio.enable = false; # desabilita PulseAudio, usamos PipeWire
-  security.rtkit.enable = true; # necessário pro PipeWire
+  services.pulseaudio.enable = false;
+  security.rtkit.enable = true;
 
   services.pipewire = {
     enable = true;
     alsa.enable = true;
-    alsa.support32Bit = true; # áudio de jogos/apps 32-bit
-    pulse.enable = true; # compatibilidade com apps que esperam PulseAudio
-    jack.enable = true; # compatibilidade com apps de áudio profissional
+    alsa.support32Bit = true;
+    pulse.enable = true;
+    jack.enable = true;
   };
 
   # ==========================================================================
-  # 6. USUÁRIO
+  # 6. USUÁRIO, SHELL E SUPER ALIASES (Flake + Multi-SRCDS)
   # ==========================================================================
+  programs.fish = {
+    enable = true;
+    interactiveShellInit = ''
+      set fish_greeting ""
+    '';
+  };
 
-  users.users.nap = { # <-- TROQUE "SEU_USUARIO" pelo seu nome de usuário
+  programs.zsh.enable = cfg.shellPadrao == "zsh";
+
+  programs.bash.interactiveShellInit = lib.mkIf (cfg.shellPadrao == "fish") ''
+    if [[ $(${pkgs.procps}/bin/ps --no-header --pid=$PPID --format=comm) != "fish" && -z ''${BASH_EXECUTION_STRING} ]]
+    then
+      shopt -q login_shell && LOGIN_OPTION='--login' || LOGIN_OPTION=""
+      exec ${pkgs.fish}/bin/fish $LOGIN_OPTION
+    fi
+  '';
+
+  users.users.${cfg.usuario} = {
     isNormalUser = true;
-    description = "nap";
+    description = cfg.usuario;
+    shell = if cfg.shellPadrao == "zsh" then pkgs.zsh else pkgs.bashInteractive;
     extraGroups = [
-      "wheel" # permite usar sudo
+      "wheel"
       "networkmanager"
       "video"
       "audio"
-      "docker" # necessário para usar Docker sem sudo (seção 9)
-    ];
-    shell = pkgs.zsh; # troque para pkgs.bash se preferir
+    ]
+    ++ lib.optional cfg.modulos.gaming "gamemode"
+    ++ lib.optional (cfg.modulos.docker && !cfg.seguranca.dockerRootless) "docker";
   };
 
-  programs.zsh.enable = true; # precisa estar habilitado se usar zsh acima
+  # --- Aliases Globais + Aliases Dinâmicos de Cada Servidor SRCDS ---
+  environment.shellAliases = {
+    # >> Gerenciamento do NixOS e Flakes <<
+    nrs    = "sudo nixos-rebuild switch --flake /etc/nixos#${cfg.hostname}";
+    nrt    = "sudo nixos-rebuild test --flake /etc/nixos#${cfg.hostname}";
+    nroll  = "sudo nixos-rebuild switch --rollback";
+    nconf  = "sudo nvim /etc/nixos/configuration.nix";
+    nflake = "sudo nvim /etc/nixos/flake.nix";
+    nup    = "sudo nix flake update --flake /etc/nixos && sudo nixos-rebuild switch --flake /etc/nixos#${cfg.hostname}";
+    ngc    = "sudo nix-collect-garbage -d && nix-collect-garbage -d";
+    nopt   = "sudo nix-store --optimise";
+    ngen   = "sudo nix-env --list-generations --profile /nix/var/nix/profiles/system";
+
+    # >> Monitoramento, Segurança e Rede <<
+    top        = "btop";
+    gpu        = "nvtop";
+    ports      = "sudo ss -tulanp";
+    myip       = "curl -s ifconfig.me && echo ''";
+    espaco     = "df -h -x tmpfs -x devtmpfs";
+    limpar-ram = "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'";
+    erros-boot = "journalctl -p 3 -xb";
+
+    # >> Git & Docker <<
+    lg    = "lazygit";
+    gs    = "git status -sb";
+    ga    = "git add .";
+    gc    = "git commit -m";
+    gp    = "git push";
+    dps   = "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'";
+    dcu   = "docker compose up -d";
+    dcd   = "docker compose down";
+    dlogs = "docker compose logs -f";
+  } // aliasesSrcds;
 
   # ==========================================================================
-  # 7. PACOTES DO SISTEMA
+  # 7. HOME MANAGER EMBUTIDO (Gerencia Dotfiles e Apps do Usuário)
   # ==========================================================================
-  # Lista ÚNICA de pacotes, dividida em sub-blocos só por organização visual.
-  # Pra remover algo, basta apagar a linha. Pra adicionar, basta criar uma
-  # linha nova dentro do grupo que fizer mais sentido (ou criar um grupo novo).
+  # Tudo dentro deste bloco configura a sua conta "nap" sem precisar de root
+  # e sem criar arquivos separados!
+  config = lib.mkIf hmDisponivel {
+    home-manager.useGlobalPkgs = true;
+    home-manager.useUserPackages = true;
+    home-manager.backupFileExtension = "backup"; # Evita erro se já existir um arquivo de config antigo
 
-  environment.systemPackages = with pkgs; [
-    # --- essenciais de sistema ---
+    home-manager.users.${cfg.usuario} = { pkgs, ... }: {
+      home.stateVersion = cfg.stateVersion;
+
+      # Pacotes exclusivos do seu usuário (ou pacotes vindos de Flakes externos)
+      home.packages = with pkgs; [
+        # Exemplo: se adicionou um flake externo no flake.nix, chame aqui:
+        # inputs.zen-browser.packages.${pkgs.system}.default
+      ];
+
+      # Configuração declarativa do Git
+      programs.git = {
+        enable = true;
+        userName = cfg.gitUser;
+        userEmail = cfg.gitEmail;
+        extraConfig = {
+          init.defaultBranch = "main";
+          pull.rebase = false;
+        };
+      };
+
+      # Prompt moderno Starship já integrado ao Fish
+      programs.starship = {
+        enable = true;
+        enableFishIntegration = true;
+      };
+
+      # Diretórios padrão XDG (Downloads, Documents, Pictures, etc.)
+      xdg.userDirs = {
+        enable = true;
+        createDirectories = true;
+      };
+    };
+  };
+
+  # ==========================================================================
+  # 8. PACOTES DO SISTEMA
+  # ==========================================================================
+  environment.systemPackages = (with pkgs; [
     wget
     curl
     git
@@ -244,64 +485,61 @@ in
     p7zip
     file
     killall
-    pciutils # lspci — útil pra debug de GPU/hardware
-    usbutils # lsusb
+    pciutils
+    usbutils
+    fastfetch
+    kitty
+    nvtopPackages.nvidia
 
-    # --- ferramentas de Nvidia/GPU ---
-    nvtopPackages.nvidia # monitor de uso da GPU, tipo htop
+    fishPlugins.done
+    fishPlugins.fzf-fish
+    fzf
 
-    # --- terminal ---
-    kitty # terminal rápido, funciona bem com Wayland e Nvidia
-    pkgs.fastfetch
+    brave
+    firefox-bin
+    signal-desktop
+    kdePackages.kleopatra
+    tor-browser
+    pkgsUnstable.proton-vpn
+    filezilla
+    qbittorrent-enhanced
 
-    # --- gaming (seção 8) ---
-    mangohud # overlay de FPS/temperatura/uso de GPU nos jogos
-    protonup-qt # gerenciador gráfico de versões do Proton-GE
-    lutris # launcher pra jogos fora da Steam (Epic, GOG, emuladores, etc)
-    heroic # launcher pra Epic Games / GOG nativo no Linux
-    wineWow64Packages.stable # Wine, caso precise rodar algo fora do Steam
+    yt-dlp
+    ffmpeg-full
+    obs-studio
+
+    steamcmd
+    steam-run
+  ])
+  ++ lib.optionals cfg.modulos.gaming (with pkgs; [
+    mangohud
+    protonup-qt
+    lutris
+    heroic
+    wineWow64Packages.stable
     winetricks
-    discord # comunicação enquanto joga
-
-    # --- desenvolvimento (seção 9) ---
+    discord
+    xonotic
+    r2modman
+  ])
+  ++ lib.optionals cfg.modulos.dev (with pkgs; [
     vscode
     neovim
     python3
     nodejs_22
     go
-    rustup # gerencia toolchains do Rust (rustc, cargo, etc)
+    rustup
     gcc
     gnumake
     cmake
     pkg-config
-    jq # manipular JSON no terminal
-    ripgrep # grep rápido
-    fd # find rápido
-    lazygit # interface TUI pro git
+    jq
+    ripgrep
+    fd
+    lazygit
     postman
-
-    # --- servidor SRCDS (seção 11) ---
-    steamcmd
-    pkgs.vmware-workstation
-    pkgs.filezilla
-    # ---- Privacidade e afins ------
-    pkgs.signal-desktop
-    pkgs.kdePackages.kleopatra
-    pkgs.i2p
-    pkgs.tor-browser
-    unstable.proton-vpn
-    #browsers
-    pkgs.brave
-    pkgs.firefox-bin
-    #games
-    pkgs.xonotic
-    pkgs.r2modman
-    #media
-    pkgs.yt-dlp
-    pkgs.ffmpeg-full
-    pkgs.obs-studio
-    pkgs.qbittorrent-enhanced
-    #hyprland
+  ])
+  ++ lib.optionals cfg.desktop.hyprland (with pkgs; [
     alsa-utils
     wofi
     waybar
@@ -313,10 +551,8 @@ in
     kdePackages.polkit-kde-agent-1
     grim
     slurp
-  ];
+  ]);
 
-  security.polkit.enable = true;
-  # Fontes (importante pra jogos/dev que usam ícones, ligatures, etc).
   fonts.packages = with pkgs; [
     noto-fonts
     noto-fonts-color-emoji
@@ -325,54 +561,70 @@ in
   ];
 
   # ==========================================================================
-  # 8. GAMING
+  # 9. GAMING E EXECUÇÃO DE BINÁRIOS EXTERNOS
   # ==========================================================================
-
-  programs.steam = {
+  programs.steam = lib.mkIf cfg.modulos.gaming {
     enable = true;
-    remotePlay.openFirewall = true; # abre portas pro Steam Remote Play
-    dedicatedServer.openFirewall = true; # abre portas pra servidores Steam (úteis p/ SRCDS também)
-    gamescopeSession.enable = true; # permite rodar jogos via Gamescope (modo "consola")
+    remotePlay.openFirewall = true;
+    dedicatedServer.openFirewall = (servidoresAtivos != {});
+    gamescopeSession.enable = true;
+    extraCompatPackages = with pkgs; [
+      proton-ge-bin
+    ];
   };
 
-  # GameMode: otimiza performance da CPU/GPU automaticamente quando um jogo
-  # está rodando (governor de CPU, prioridade de processo, etc).
-  programs.gamemode.enable = true;
+  programs.gamemode = lib.mkIf cfg.modulos.gaming {
+    enable = true;
+    settings.general.inhibit_screensaver = 0;
+  };
 
-  # Os pacotes de gaming (MangoHud, Lutris, Heroic, Wine, Discord...) ficam
-  # todos juntos na lista única da seção 7, no bloco "--- gaming ---".
+  programs.appimage = lib.mkIf cfg.modulos.appimage {
+    enable = true;
+    binfmt = true;
+  };
 
-  #Binary RUNNING - CRUTIAL
-  programs.nix-ld.enable = true;
+  programs.nix-ld = {
+    enable = true;
+    libraries = with pkgs; [
+      stdenv.cc.cc
+      zlib
+      fuse3
+      icu
+      nss
+      openssl
+      curl
+      expat
+      SDL2
+    ];
+  };
 
   # ==========================================================================
-  # 9. DESENVOLVIMENTO
+  # 10. VIRTUALIZAÇÃO (Docker Blindado & VMware)
   # ==========================================================================
-  # Os pacotes de dev (VSCode, Neovim, linguagens, toolchains...) ficam
-  # todos juntos na lista única da seção 7, no bloco "--- desenvolvimento ---".
-
-  # Docker — conforme você pediu.
-
-  virtualisation.vmware.host.enable = true;
-
-  virtualisation.docker = {
+  virtualisation.docker = lib.mkIf (cfg.modulos.docker && !cfg.seguranca.dockerRootless) {
     enable = true;
     enableOnBoot = true;
+    daemon.settings = {
+      live-restore = true;
+    } // lib.optionalAttrs cfg.seguranca.dockerLocalOnly {
+      ip = "127.0.0.1";
+    };
   };
-  # Lembrete: seu usuário já está no grupo "docker" lá na seção 6, então
-  # não precisa de sudo pra rodar comandos docker depois do rebuild + reboot.
+
+  virtualisation.docker.rootless = lib.mkIf (cfg.modulos.docker && cfg.seguranca.dockerRootless) {
+    enable = true;
+    setSocketVariable = true;
+  };
+
+  virtualisation.vmware.host.enable = cfg.modulos.vmware;
 
   # ==========================================================================
-  # 10. FLATPAK
+  # 11. FLATPAK
   # ==========================================================================
+  services.flatpak.enable = cfg.modulos.flatpak;
 
-  services.flatpak.enable = true;
-
-  # Adiciona o Flathub automaticamente como repositório (equivalente a rodar
-  # "flatpak remote-add flathub https://flathub.org/repo/flathub.flatpakrepo"
-  # manualmente, mas já fica garantido todo rebuild).
-  systemd.services.flatpak-add-flathub-repo = {
-    description = "Adiciona o repositório Flathub";
+  systemd.services.flatpak-add-flathub-repo = lib.mkIf cfg.modulos.flatpak {
+    description = "Garante o repositório Flathub configurado";
     wantedBy = [ "multi-user.target" ];
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
@@ -383,106 +635,77 @@ in
     serviceConfig.Type = "oneshot";
   };
 
-  # Dica: depois do rebuild, instale apps com:
-  #   flatpak install flathub com.exemplo.App
-
   # ==========================================================================
-  # 11. SERVIDOR SRCDS (Source Dedicated Server — CS:GO/CS2, TF2, GMod, etc)
+  # 12. GERADOR MULTI-SRCDS (Pastas, Firewall Dinâmico e Serviços Isolados)
   # ==========================================================================
-  #
-  # Simples: o servidor roda com o seu próprio usuário, sem usuário dedicado
-  # nem sandboxing. Os arquivos ficam em /srv/srcds e você mexe neles
-  # normalmente, sem precisar de "sudo -iu" pra nada.
-  #
-  # Pra ATIVAR um jogo: troque "enable = false" pra "true" no bloco
-  # correspondente abaixo e ajuste a porta se precisar.
+  # Cria a pasta base e as subpastas para TODOS os servidores declarados no Painel
+  systemd.tmpfiles.rules =
+    [ "d ${srcdsBaseDir} 0755 ${cfg.usuario} users -" ]
+    ++ (lib.mapAttrsToList (nome: srv:
+      "d ${dirDoServidor nome srv} 0755 ${cfg.usuario} users -"
+    ) cfg.srcds.servidores)
+    ++ lib.optional cfg.discoSecundario.enable
+      "d ${cfg.discoSecundario.pontoMontagem} 0755 ${cfg.usuario} users -";
 
-  # SteamCMD (na lista única da seção 7) é a ferramenta oficial da Valve
-  # pra baixar/atualizar servidores.
-
-  # --- Portas padrão de jogos baseados em Source -------------------------
-  # Descomente as portas dos jogos que você realmente vai hospedar.
+  # Abre no firewall APENAS as portas dos servidores que estão com enable = true
   networking.firewall = {
-    allowedUDPPorts = [
-       27015 # CS2 / CS:GO / TF2 / GMod (porta padrão de jogo)
-       27020
-       9999  # voz STV / SourceTV
-    ];
-    allowedTCPPorts = [
-       27015 # RCON / consulta de servidor
-       9999
-    ];
+    allowedUDPPorts = lib.concatLists (lib.mapAttrsToList (_: srv: srv.portasUDP) servidoresAtivos);
+    allowedTCPPorts = lib.concatLists (lib.mapAttrsToList (_: srv: srv.portasTCP) servidoresAtivos);
   };
 
-  # --- Exemplo de serviço systemd pra rodar um servidor SRCDS -------------
-  # Isso transforma seu servidor em um "serviço de verdade": liga sozinho
-  # no boot, reinicia se cair, e você controla com:
-  #   systemctl start cs2-server
-  #   systemctl stop cs2-server
-  #   systemctl status cs2-server
-  #   journalctl -u cs2-server -f      (ver logs ao vivo)
-  #
-  # Está desabilitado por padrão (enable = false). Ajuste o ExecStart com
-  # o caminho real do seu servidor depois de baixá-lo via steamcmd, e troque
-  # "SEU_USUARIO" pelo mesmo usuário que você configurou na seção 6.
+  # Gera um serviço systemd isolado ("srcds-gmod", "srcds-cs2", etc.) para cada servidor
+  systemd.services = lib.mapAttrs' (nome: srv:
+    let
+      workDir = dirDoServidor nome srv;
+    in
+    lib.nameValuePair "srcds-${nome}" {
+      description = "Servidor Dedicado Source (${nome})";
+      enable = srv.enable;
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      wantedBy = lib.optional srv.autoStart "multi-user.target";
 
-  systemd.services.cs2-server = {
-    description = "Servidor dedicado CS2 (SRCDS)";
-    enable = false; # <-- mude para true quando o servidor estiver instalado
-    after = [ "network-online.target" ];
-    wants = [ "network-online.target" ];
-    # wantedBy = [ "multi-user.target" ]; # descomente pra iniciar junto com o boot
+      unitConfig.RequiresMountsFor = [ workDir ];
 
-    serviceConfig = {
-      Type = "simple";
-      User = "nap"; # <-- TROQUE pelo seu usuário (mesmo da seção 6)
-      WorkingDirectory = "/srv/srcds/cs2";
+      serviceConfig = {
+        Type = "simple";
+        User = cfg.usuario;
+        Group = "users";
+        WorkingDirectory = workDir;
+        Environment = [ "HOME=${srcdsBaseDir}" ];
+        ExecStart = "${pkgs.steam-run}/bin/steam-run ${workDir}/${srv.execBin} ${srv.execArgs}";
+        Restart = "on-failure";
+        RestartSec = "10s";
 
-      # Ajuste o comando conforme a documentação do jogo. Exemplo para CS2:
-      ExecStart = ''
-        /srv/srcds/cs2/game/bin/linuxsteamrt64/cs2 -dedicated \
-          -port 27015 \
-          +map de_dust2 \
-          +game_type 0 +game_mode 1 \
-          -maxplayers 10
-      '';
-
-      Restart = "on-failure";
-      RestartSec = "10s";
-    };
-  };
-
-  # --- Como instalar/atualizar o servidor (faça manualmente uma vez) -----
-  # mkdir -p /srv/srcds/cs2 && sudo chown $USER:$USER /srv/srcds/cs2
-  # steamcmd +force_install_dir /srv/srcds/cs2 +login anonymous \
-  #   +app_update 730 validate +quit
-  #
-  # Pra outros jogos, troque o "app_update <ID>" pelo App ID do servidor
-  # dedicado (TF2 = 232250, GMod = 4020, CS:GO legado = 740, etc) e crie
-  # um bloco systemd novo igual ao do cs2-server acima, copiando e
-  # ajustando o nome/porta/comando.
+        # --- Sandboxing contra RCE ---
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = "tmpfs";
+        BindPaths = [ srcdsBaseDir workDir ];
+        InaccessiblePaths = [ "-/run/docker.sock" "-/var/run/docker.sock" ];
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        RestrictSUIDSGID = true;
+      };
+    }
+  ) cfg.srcds.servidores;
 
   # ==========================================================================
-  # 12. EXTRAS / MANUTENÇÃO DO SISTEMA
+  # 13. MANUTENÇÃO E HARDENING DO NIX STORE
   # ==========================================================================
-
-  # Limpeza automática do Nix store: remove geração antigas com mais de 14
-  # dias, evitando que o disco lote com versões antigas de pacotes.
   nix.gc = {
-    automatic = true;
+    automatic = cfg.manutencao.gcAutomatico;
     dates = "weekly";
-    options = "--delete-older-than 14d";
+    options = "--delete-older-than ${cfg.manutencao.gcManterDias}";
   };
 
-  # Otimiza o Nix store automaticamente (deduplica arquivos idênticos).
-  nix.settings.auto-optimise-store = true;
+  nix.optimise.automatic = true;
+  nix.settings = {
+    auto-optimise-store = true;
+    experimental-features = [ "nix-command" "flakes" ];
+    allowed-users = [ "@wheel" ];
+  };
 
-  # Habilita "flakes" e o novo comando "nix" — não obrigatório aqui, mas
-  # deixa o sistema pronto caso você queira migrar para flakes no futuro.
-  nix.settings.experimental-features = [ "nix-command" "flakes" ];
-
-  # Mantenha a mesma versão do "state" que você tinha na instalação original
-  # do NixOS. NÃO mude este valor depois de instalado — ele só existe pra
-  # evitar problemas de migração de dados entre versões do NixOS.
-  system.stateVersion = "26.05"; # <-- mantenha igual ao que o instalador gerou
+  system.stateVersion = cfg.stateVersion;
 }
